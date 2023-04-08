@@ -1,4 +1,3 @@
-// express boilerplate
 const express = require("express");
 const moment = require("moment");
 const app = express();
@@ -7,8 +6,6 @@ const port = 3000;
 app.listen(port, () => {});
 
 const { MongoClient, ObjectId } = require("mongodb");
-// or as an es module:
-// import { MongoClient } from 'mongodb'
 
 // Connection URL
 const url = "mongodb://root:example@localhost:27017";
@@ -30,19 +27,17 @@ client
     console.error(err);
   });
 
-app.get("/", async (req, res) => {
-  return res.send("home route get");
-});
-
 app.post("/", async (req, res) => {
-  let ret = getCurrentDate();
-  return res.send(ret);
+  //let ret = parseDate("19:00:05 15/04/2029");
+  let ret = parseDate("babababab");
+  res.send(ret);
 });
 
-//create a task
+//create a task. Date has to be specified in the format HH:mm:ss DD/MM/YYYY
 app.post("/task/create", async (req, res) => {
   let taskName = req.body.taskName;
-  let dueDate = req.body.dueDate;
+  let dueDate = parseDate(req.body.dueDate);
+  if (dueDate === "NaN") return res.status(400).json({ message: "invalid due date format." }); 
 
   let id = await generateUniqueID();
 
@@ -95,19 +90,29 @@ app.post("/tasks/status/:status", async (req, res) => {
 //filter tasks by name
 app.post("/tasks/name", async (req, res) => {
   let taskName = req.body.taskName;
-  let regex = new RegExp(`${taskName}`, 'i');
+  let regex = new RegExp(`${taskName}`, "i");
   let result = await collection.find({ taskName: { $regex: regex } }).toArray();
   return res.json({ tasks: result });
 });
 
 //sort tasks by dates
+app.post("/tasks/sort/:field", async (req, res) => {
+  let field = req.params.field;
 
+  if (!(field === "dueDate" || field == "startDate" || field == "doneDate"))
+    return res.status(400).json({ message: "invalid sort criteria" });
 
+  //match all fields with a value
+  let result = await collection
+    .find({ [field]: { $ne: "" } })
+    .sort({ [field]: 1 })
+    .toArray();
 
+  return res.json({ tasks: result });
+});
 
 //delete a task
 app.post("/task/:id/delete", async (req, res) => {
-  //console.log('delete route')
   let id = req.params.id;
   let result = await collection.findOneAndDelete({ _id: id });
 
@@ -150,10 +155,9 @@ app.post("/task/:id/:operation", async (req, res) => {
   } else {
     return res.status(400).json({ message: "task wasn't found" });
   }
-
-  //return res.send(operation);
 });
 
+//update a task with a specified id
 async function updateTask(id, update) {
   let result = await collection.findOneAndUpdate(
     { _id: id },
@@ -167,13 +171,13 @@ async function updateTask(id, update) {
   return result;
 }
 
+//generate a unique ID for a document that doesn't already exist in the database
 async function generateUniqueID() {
   let id;
   let found = true;
 
   while (found) {
     id = Math.random().toString(16).substring(2, 6);
-    //id = '8A22';
     let result = await collection.findOne({ _id: id });
     if (!result) {
       found = false;
@@ -183,7 +187,14 @@ async function generateUniqueID() {
   return id;
 }
 
+//get the current date and format into unix timestamp form
 function getCurrentDate() {
-  const formattedDate = moment().utc().format("HH:mm:ss DD/MM/YYYY");
-  return formattedDate;
+  const formattedDate = Date.now();
+  return formattedDate.toString();
+}
+
+//parse a date in the format HH:mm:ss DD/MM/YYYY and convert it into unix timestamp form
+function parseDate(date) {
+  let ret = moment(date, "HH:mm:ss DD/MM/YYYY");
+  return ret.unix().toString();
 }
