@@ -27,11 +27,6 @@ client
     console.error(err);
   });
 
-app.post("/", async (req, res) => {
-  //let ret = parseDate("19:00:05 15/04/2029");
-  let ret = parseDate("babababab");
-  res.send(ret);
-});
 
 //create a task. Date has to be specified in the format HH:mm:ss DD/MM/YYYY
 app.post("/task/create", async (req, res) => {
