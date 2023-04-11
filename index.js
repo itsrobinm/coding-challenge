@@ -31,12 +31,6 @@ client
     console.error(err);
   });
 
-//testing route
-app.post("/testing", async (req, res) => {
-  let timeTest = moment().format(DATE_FORMAT);
-  return res.send(timeTest);
-});
-
 //create a task. Date has to be specified in the format HH:mm:ss DD/MM/YYYY
 app.post("/task/create", async (req, res) => {
   let taskName = req.body.taskName;
@@ -55,6 +49,7 @@ app.post("/task/create", async (req, res) => {
     startDate: "",
     doneDate: "",
     status: "",
+    assocProjectID: "",
   });
 
   if (newTask) return res.status(201).json({ success: true });
@@ -119,16 +114,61 @@ app.post("/project/:id/assignTask", async (req, res) => {
 
   let updateProjectResult = await updateProject(id, update);
 
-
   if (updateProjectResult.value && updateTaskResult.value) {
     return res.json({ success: true });
   } else {
     return res.status(400).json({ message: "error adding task to project" });
   }
+});
 
+//edit a project
+app.post("/project/:id/edit", async (req, res) => {
+  let id = req.params.id;
 
-  //await updateProject(id, update);
-  //res.send("hello");
+  //check the project exists
+  let project = await projectsCollection.findOne({ _id: id });
+  if (!project) return res.status(400).json({ message: "project not found" });
+
+  //make sure only certain fields can be changed
+  let update = {};
+  if (req.body.projectName) update.projectName = req.body.projectName;
+  if (req.body.startDate) update.startDate = req.body.startDate;
+  if (req.body.dueDate) update.dueDate = req.body.dueDate;
+
+  //perform validtion on the dates, if supplied
+  if (update.startDate) {
+    if (!moment(update.startDate, DATE_FORMAT, true).isValid())
+      return res.status(400).json({ message: "invalid start date format." });
+  }
+
+  if (update.dueDate) {
+    if (!moment(update.dueDate, DATE_FORMAT, true).isValid())
+      return res.status(400).json({ message: "invalid due date format." });
+  }
+
+  let updateProjectResult = await updateProject(id, update);
+
+  if (updateProjectResult.value) {
+    return res.json({ success: true });
+  } else {
+    return res.status(400).json({ message: "error updating project" });
+  }
+});
+
+//sort projects by dates
+app.post("/projects/sort/:field", async (req, res) => {
+  let field = req.params.field;
+
+  if (!(field === "startDate" || field == "dueDate"))
+  return res.status(400).json({ message: "invalid sort criteria" });
+
+  //match all fields with a value
+  let result = await projectsCollection.find({ [field]: { $ne: "" } }).toArray();
+
+    //sort the returned array
+  result.sort((a, b) => parseDate(a[field]) - parseDate(b[field]));
+
+  return res.json({ projects: result });
 });
 
 //edit a task
@@ -136,12 +176,32 @@ app.post("/task/:id/edit", async (req, res) => {
   let id = req.params.id;
   let update = {};
 
+  //check task exists
+  let task = await tasksCollection.findOne({ _id: id });
+  if (!task) return res.status(400).json({ message: "task not found" });
+
   //make sure no extra fields can be injected
   if (req.body.taskName) update.taskName = req.body.taskName;
   if (req.body.startDate) update.startDate = req.body.startDate;
   if (req.body.dueDate) update.dueDate = req.body.dueDate;
   if (req.body.doneDate) update.doneDate = req.body.doneDate;
   if (req.body.status) update.status = req.body.status;
+
+  //perform validtion on the dates, if supplied
+  if (update.startDate) {
+    if (!moment(update.startDate, DATE_FORMAT, true).isValid())
+      return res.status(400).json({ message: "invalid start date format." });
+  }
+
+  if (update.dueDate) {
+    if (!moment(update.dueDate, DATE_FORMAT, true).isValid())
+      return res.status(400).json({ message: "invalid due date format." });
+  }
+
+  if (update.doneDate) {
+    if (!moment(update.doneDate, DATE_FORMAT, true).isValid())
+      return res.status(400).json({ message: "invalid done date format." });
+  }
 
   let result = await updateTask(id, update);
 
@@ -191,16 +251,76 @@ app.post("/tasks/sort/:field", async (req, res) => {
   return res.json({ tasks: result });
 });
 
-//delete a task
+//delete a task. we must also check that this task is deleted from any project its associated with
 app.post("/task/:id/delete", async (req, res) => {
   let id = req.params.id;
-  let result = await tasksCollection.findOneAndDelete({ _id: id });
+  let taskDelete = await tasksCollection.findOneAndDelete({ _id: id });
 
-  if (result.value) {
+  if (!taskDelete.value)
+    return res.status(400).json({ message: "error deleting this task" });
+
+  //let projectsWithThisTask = projectsCollection.find({}).toArray();
+  //let assocProjectID = taskDelete.value.assocProjectID;
+
+  if (taskDelete.value.assocProjectID !== "") {
+    let assocProjectID = taskDelete.value.assocProjectID;
+
+    //first check, if the associated project still exists
+    let project = await projectsCollection.findOne({ _id: assocProjectID });
+
+    //delete the tasks in this project
+    if (project) {
+      projectsCollection.updateOne(
+        { _id: assocProjectID },
+        { $pull: { tasks: { _id: taskDelete.value._id } } }
+      );
+    }
+  }
+
+  if (taskDelete.value) {
     return res.json({ success: true });
   } else {
-    return res.status(400).json({ message: "task wasn't found" });
+    return res.status(400).json({ message: "error deleting this task" });
   }
+});
+
+//delete a project. we must also deassociate tasks from this project
+app.post("/project/:id/delete", async (req, res) => {
+  let id = req.params.id;
+
+  let projectDelete = await projectsCollection.findOneAndDelete({ _id: id });
+  if (!projectDelete.value)
+    return res.status(400).json({ message: "error deleting this project" });
+
+  projectDelete.value.tasks.forEach(async (task, index) => {
+    //console.log(task);
+    let update = {};
+    update.assocProjectID = "";
+    await updateTask(task._id, update);
+  });
+
+  if (projectDelete.value) {
+    return res.json({ success: true });
+  } else {
+    return res.status(400).json({ message: "error deleting this project" });
+  }
+});
+
+//list all projects
+app.post("/projects", async (req, res) => {
+  let result = await projectsCollection.find({}).toArray();
+  return res.json({ projects: result });
+});
+
+//filter projects by name
+app.post("/projects/name", async (req, res) => {
+  let projectName = req.body.projectName;
+  console.log(projectName);
+  let regex = new RegExp(`${projectName}`, "i");
+  let result = await projectsCollection
+    .find({ projectName: { $regex: regex } })
+    .toArray();
+  return res.json({ projects: result });
 });
 
 //change the status of a task
@@ -211,7 +331,6 @@ app.post("/task/:id/:operation", async (req, res) => {
 
   //get the task to see it's current status
   let task = await tasksCollection.findOne({ _id: id });
-
   if (!task) return res.status(400).json({ message: "task not found" });
 
   if (operation === "start") {
@@ -289,10 +408,7 @@ async function generateUniqueID() {
 
 //get the current date and format into unix timestamp form
 function getCurrentDate() {
-  /*
-  const formattedDate = Date.now();
-  return formattedDate.toString();
-  */
+  
   return moment().format(DATE_FORMAT);
 }
 
