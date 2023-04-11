@@ -7,6 +7,8 @@ app.listen(port, () => {});
 
 const { MongoClient, ObjectId } = require("mongodb");
 
+const DATE_FORMAT = "HH:mm:ss DD/MM/YYYY";
+
 // Connection URL
 const url = "mongodb://root:example@localhost:27017";
 const client = new MongoClient(url);
@@ -14,29 +16,39 @@ const client = new MongoClient(url);
 const dbName = "todoList";
 
 let db;
-let collection;
+let tasksCollection;
+let projectsCollection;
 
 client
   .connect()
   .then(() => {
     console.log("DB Connection Successfull");
     db = client.db(dbName);
-    collection = db.collection("tasks");
+    tasksCollection = db.collection("tasks");
+    projectsCollection = db.collection("projects");
   })
   .catch((err) => {
     console.error(err);
   });
 
+//testing route
+app.post("/testing", async (req, res) => {
+  let timeTest = moment().format(DATE_FORMAT);
+  return res.send(timeTest);
+});
 
 //create a task. Date has to be specified in the format HH:mm:ss DD/MM/YYYY
 app.post("/task/create", async (req, res) => {
   let taskName = req.body.taskName;
-  let dueDate = parseDate(req.body.dueDate);
-  if (dueDate === "NaN") return res.status(400).json({ message: "invalid due date format." }); 
+  let dueDate = req.body.dueDate;
+
+  //perform validation on the date
+  if (!moment(dueDate, DATE_FORMAT, true).isValid())
+    return res.status(400).json({ message: "invalid due date format." });
 
   let id = await generateUniqueID();
 
-  let newTask = await collection.insertOne({
+  let newTask = await tasksCollection.insertOne({
     _id: id,
     taskName: taskName,
     dueDate: dueDate,
@@ -46,6 +58,77 @@ app.post("/task/create", async (req, res) => {
   });
 
   if (newTask) return res.status(201).json({ success: true });
+});
+
+//create a project. start and due dates have to be specified in the format HH:mm:ss DD/MM/YYYY
+app.post("/project/create", async (req, res) => {
+  let projectName = req.body.projectName;
+  let startDate = req.body.startDate;
+  let dueDate = req.body.dueDate;
+
+  if (!moment(startDate, DATE_FORMAT, true).isValid())
+    return res.status(400).json({ message: "invalid start date format." });
+
+  if (!moment(dueDate, DATE_FORMAT, true).isValid())
+    return res.status(400).json({ message: "invalid due date format." });
+
+  let id = await generateUniqueID();
+
+  let newProject = await projectsCollection.insertOne({
+    _id: id,
+    projectName: projectName,
+    startDate: startDate,
+    dueDate: dueDate,
+    tasks: [],
+  });
+
+  if (newProject) return res.status(201).json({ success: true });
+});
+
+//assign a task to a project
+app.post("/project/:id/assignTask", async (req, res) => {
+  let id = req.params.id;
+  let taskToAdd = req.body.task;
+
+  //check the project exists
+  let project = await projectsCollection.findOne({ _id: id });
+  if (!project) return res.status(400).json({ message: "project not found" });
+
+  //check the task exists
+  let task = await tasksCollection.findOne({ _id: taskToAdd._id });
+  if (!task) return res.status(400).json({ message: "task not found" });
+
+  let tasksArr = project.tasks;
+
+  //check the project doesn't aleady have this task
+  if (tasksArr.some((item) => item._id === taskToAdd._id))
+    return res
+      .status(400)
+      .json({ message: "project already contains this task" });
+
+  tasksArr.push(taskToAdd);
+
+  let update = {};
+  update.tasks = tasksArr;
+
+  let taskUpdate = {};
+  taskUpdate.assocProjectID = id;
+
+  let updateTaskResult = await updateTask(taskToAdd._id, taskUpdate);
+  console.log(updateTaskResult.value);
+
+  let updateProjectResult = await updateProject(id, update);
+
+
+  if (updateProjectResult.value && updateTaskResult.value) {
+    return res.json({ success: true });
+  } else {
+    return res.status(400).json({ message: "error adding task to project" });
+  }
+
+
+  //await updateProject(id, update);
+  //res.send("hello");
 });
 
 //edit a task
@@ -71,14 +154,14 @@ app.post("/task/:id/edit", async (req, res) => {
 
 //list all tasks
 app.post("/tasks", async (req, res) => {
-  let result = await collection.find({}).toArray();
+  let result = await tasksCollection.find({}).toArray();
   return res.json({ tasks: result });
 });
 
 //filter tasks by status
 app.post("/tasks/status/:status", async (req, res) => {
   let status = req.params.status;
-  let result = await collection.find({ status: status }).toArray();
+  let result = await tasksCollection.find({ status: status }).toArray();
   return res.json({ tasks: result });
 });
 
@@ -86,7 +169,9 @@ app.post("/tasks/status/:status", async (req, res) => {
 app.post("/tasks/name", async (req, res) => {
   let taskName = req.body.taskName;
   let regex = new RegExp(`${taskName}`, "i");
-  let result = await collection.find({ taskName: { $regex: regex } }).toArray();
+  let result = await tasksCollection
+    .find({ taskName: { $regex: regex } })
+    .toArray();
   return res.json({ tasks: result });
 });
 
@@ -98,10 +183,10 @@ app.post("/tasks/sort/:field", async (req, res) => {
     return res.status(400).json({ message: "invalid sort criteria" });
 
   //match all fields with a value
-  let result = await collection
-    .find({ [field]: { $ne: "" } })
-    .sort({ [field]: 1 })
-    .toArray();
+  let result = await tasksCollection.find({ [field]: { $ne: "" } }).toArray();
+
+  //sort the returned array
+  result.sort((a, b) => parseDate(a[field]) - parseDate(b[field]));
 
   return res.json({ tasks: result });
 });
@@ -109,7 +194,7 @@ app.post("/tasks/sort/:field", async (req, res) => {
 //delete a task
 app.post("/task/:id/delete", async (req, res) => {
   let id = req.params.id;
-  let result = await collection.findOneAndDelete({ _id: id });
+  let result = await tasksCollection.findOneAndDelete({ _id: id });
 
   if (result.value) {
     return res.json({ success: true });
@@ -125,7 +210,7 @@ app.post("/task/:id/:operation", async (req, res) => {
   let update = {};
 
   //get the task to see it's current status
-  let task = await collection.findOne({ _id: id });
+  let task = await tasksCollection.findOne({ _id: id });
 
   if (!task) return res.status(400).json({ message: "task not found" });
 
@@ -138,6 +223,12 @@ app.post("/task/:id/:operation", async (req, res) => {
       update.doneDate = "";
     }
   } else if (operation === "finish") {
+    //you shouldn't be able to finish a task if it's not started yet
+    if (!task.startDate)
+      return res
+        .status(400)
+        .json({ message: "you can't finish a task that hasn't been started" });
+
     update.doneDate = getCurrentDate();
     update.status = "done";
   } else {
@@ -154,7 +245,21 @@ app.post("/task/:id/:operation", async (req, res) => {
 
 //update a task with a specified id
 async function updateTask(id, update) {
-  let result = await collection.findOneAndUpdate(
+  let result = await tasksCollection.findOneAndUpdate(
+    { _id: id },
+    { $set: update },
+    {
+      returnNewDocument: true,
+      upsert: false,
+    }
+  );
+
+  return result;
+}
+
+//update a project with a specified id
+async function updateProject(id, update) {
+  let result = await projectsCollection.findOneAndUpdate(
     { _id: id },
     { $set: update },
     {
@@ -173,7 +278,7 @@ async function generateUniqueID() {
 
   while (found) {
     id = Math.random().toString(16).substring(2, 6);
-    let result = await collection.findOne({ _id: id });
+    let result = await tasksCollection.findOne({ _id: id });
     if (!result) {
       found = false;
     }
@@ -184,12 +289,15 @@ async function generateUniqueID() {
 
 //get the current date and format into unix timestamp form
 function getCurrentDate() {
+  /*
   const formattedDate = Date.now();
   return formattedDate.toString();
+  */
+  return moment().format(DATE_FORMAT);
 }
 
 //parse a date in the format HH:mm:ss DD/MM/YYYY and convert it into unix timestamp form
 function parseDate(date) {
-  let ret = moment(date, "HH:mm:ss DD/MM/YYYY");
+  let ret = moment(date, DATE_FORMAT);
   return ret.unix().toString();
 }
