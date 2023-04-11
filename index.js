@@ -259,9 +259,6 @@ app.post("/task/:id/delete", async (req, res) => {
   if (!taskDelete.value)
     return res.status(400).json({ message: "error deleting this task" });
 
-  //let projectsWithThisTask = projectsCollection.find({}).toArray();
-  //let assocProjectID = taskDelete.value.assocProjectID;
-
   if (taskDelete.value.assocProjectID !== "") {
     let assocProjectID = taskDelete.value.assocProjectID;
 
@@ -408,7 +405,7 @@ async function generateUniqueID() {
 
 //get the current date and format into unix timestamp form
 function getCurrentDate() {
-  
+
   return moment().format(DATE_FORMAT);
 }
 
